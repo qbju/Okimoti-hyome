@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#10131b">
+<title>Okimoti-hyome — XCompact</title>
+<style>
+:root{color-scheme:dark;--bg:#10131b;--panel:#191f2b;--line:#30394b;--muted:#9ba8bd;--text:#eef3fb;--accent:#a7f3d0;--accent2:#7dd3fc;--danger:#fda4af}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 20% 0%,#1b3040 0,transparent 42%),var(--bg);color:var(--text);font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif}
+main{max-width:980px;margin:auto;padding:36px 20px 72px}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:28px}.brand{font-weight:800;letter-spacing:.04em}.pill{border:1px solid var(--line);border-radius:999px;padding:5px 10px;color:var(--muted);font-size:12px}
+h1{font-size:clamp(30px,6vw,52px);line-height:1.08;margin:10px 0 14px;letter-spacing:-.04em}h1 span{color:var(--accent)}.lead{color:var(--muted);max-width:700px;margin:0 0 26px}
+.panel{background:linear-gradient(160deg,#1b2330,#151a24);border:1px solid var(--line);border-radius:18px;padding:20px;margin:16px 0;box-shadow:0 16px 50px #0002}
+label{display:block;font-weight:650;margin:0 0 8px}.hint{color:var(--muted);font-size:12px;margin-top:6px}
+textarea{width:100%;min-height:190px;resize:vertical;background:#0d1119;color:var(--text);border:1px solid #354055;border-radius:12px;padding:14px;font:14px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;outline:none}textarea:focus{border-color:var(--accent2)}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:14px}button{border:0;border-radius:10px;padding:11px 16px;background:var(--accent);color:#102019;font-weight:800;cursor:pointer}button.secondary{background:#293447;color:var(--text);border:1px solid #3b4960}button:disabled{opacity:.5;cursor:wait}
+select,input{background:#0d1119;color:var(--text);border:1px solid #354055;border-radius:9px;padding:9px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.stat{background:#0d121b;border:1px solid var(--line);border-radius:12px;padding:13px}.stat b{display:block;font-size:23px;letter-spacing:-.03em}.stat small{color:var(--muted)}
+.result{min-height:90px;word-break:break-all;white-space:pre-wrap;font:13px/1.6 ui-monospace,monospace;background:#0d1119;border:1px solid var(--line);border-radius:12px;padding:14px}
+.status{color:var(--muted);font-size:13px}.ok{color:var(--accent)}.err{color:var(--danger)}
+details{color:var(--muted);font-size:13px}summary{cursor:pointer;color:var(--text);font-weight:700}
+footer{margin-top:28px;color:var(--muted);font-size:12px}
+@media(max-width:650px){main{padding:24px 14px 48px}.panel{padding:15px}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.top{align-items:flex-start}}
+</style>
+</head>
+<body>
+<main>
+  <div class="top"><div class="brand">◈ OKIMOTI-HYOME</div><div class="pill">EXPERIMENTAL · CLIENT SIDE</div></div>
+  <h1>Long text,<br><span>tiny post.</span></h1>
+  <p class="lead">文章を辞書置換 → Zstandard → Base8192 に変換。圧縮・復号はブラウザー内で行います。サーバーには文章を送信しません。</p>
+
+  <section class="panel">
+    <label for="source">入力テキスト</label>
+    <textarea id="source" placeholder="長い文章をここに貼り付ける…">春はあけぼの。やうやう白くなりゆく山ぎは、少しあかりて、紫だちたる雲の細くたなびきたる。
+夏は夜。月のころはさらなり、闇もなほ、蛍の多く飛びちがひたる。また、ただ一つ二つなど、ほのかにうち光りて行くもをかし。
+秋は夕暮れ。夕日のさして山の端いと近うなりたるに、烏の寝どころへ行くとて、三つ四つ、二つ三つなど飛び急ぐさへあはれなり。
+冬はつとめて。雪の降りたるは言ふべきにもあらず、霜のいと白きも、またさらでもいと寒きに、火など急ぎおこして、炭持て渡るもいとつきづきし。</textarea>
+    <div class="controls">
+      <button id="encode">辞書 + Zstd + Base8192 に変換</button>
+      <button id="decode" class="secondary">出力を復号</button>
+      <label style="display:flex;align-items:center;gap:8px;margin:0;font-weight:500">X目標ウェイト <select id="limit"><option value="140" selected>140（旧上限目安）</option><option value="280">280（現在の標準上限目安）</option></select></label>
+    </div>
+    <p class="hint">Zstd WASM は初回のみ jsDelivr CDN から読み込みます。ネット接続が必要です。</p>
+  </section>
+
+  <section class="panel">
+    <label>変換結果</label>
+    <div id="output" class="result">ここにBase8192の出力が表示されます。</div>
+    <div class="controls"><button id="copy" class="secondary">出力をコピー</button><span id="status" class="status">準備完了</span></div>
+  </section>
+
+  <section class="panel">
+    <label>計測</label>
+    <div class="stats">
+      <div class="stat"><b id="original">—</b><small>元データ UTF-8 bytes</small></div>
+      <div class="stat"><b id="dictsize">—</b><small>辞書置換後 bytes</small></div>
+      <div class="stat"><b id="compressed">—</b><small>Zstd bytes</small></div>
+      <div class="stat"><b id="symbols">—</b><small>Base8192 symbols</small></div>
+    </div>
+    <p id="limitStatus" class="hint">Xの文字数ウェイトを概算します。実際のXカウントとは完全一致しない場合があります。</p>
+  </section>
+
+  <details class="panel">
+    <summary>方式と注意点</summary>
+    <p>辞書は古典文学で頻出する語句を短いトークンに置換する固定辞書です。その後、Zstandardで圧縮します。Zstdの学習済み辞書ファイルを使う方式ではなく、辞書置換を前処理として組み合わせる実験です。</p>
+    <p>Base8192の文字セットはUnicodeの文字カテゴリから決定的に生成します。Unicodeデータベースのバージョンが異なる環境では文字セットが一致しない可能性があります。異なる端末間での復号には、同一の文字セットを固定・配布する仕組みが必要です。</p>
+    <p>Unicode文字のX上のウェイトは文字種によって異なります。ここでのカウントは目安です。140ウェイトを超えた場合は、分割投稿するか、別の共有方法を検討してください。</p>
+  </details>
+  <footer>Okimoti-hyome · XCompact prototype · All processing stays in your browser except loading the Zstd WebAssembly module.</footer>
+</main>
+<script type="module">
+const $ = id => document.getElementById(id);
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+const MAGIC = new Uint8Array([79,75,72,89,1]); // OKHY v1
+const DICT = [
+"春はあけぼの","やうやう白くなりゆく","山ぎは","少しあかりて","紫だちたる","雲の細くたなびきたる",
+"夏は夜","月のころはさらなり","闇もなほ","蛍の多く飛びちがひたる","ほのかにうち光りて","行くもをかし",
+"秋は夕暮れ","夕日のさして","山の端","いと近うなりたる","烏の寝どころへ行く","飛び急ぐさへあはれなり",
+"冬はつとめて","雪の降りたる","言ふべきにもあらず","霜のいと白き","またさらでも","火など急ぎおこして",
+"炭持て渡る","いとつきづきし","ということ","すること","である","だった","そして","しかし","つまり","たとえば",
+"よろしくお願いします","ありがとうございます","こんにちは","おはようございます","こんばんは","わたしたち","インターネット","プログラミング","情報処理","人工知能","機械学習","データベース",
+"the ","and ","that ","with ","from ","this ","日本語","文字列","Unicode","圧縮","復号"
+].sort((a,b)=>b.length-a.length);
+const TOKENS = new Map(DICT.map((s,i)=>[s,i+1]));
+let zstdPromise;
+let alphabetCache;
+async function getZstd(){
+  if(!zstdPromise) zstdPromise = import("https://cdn.jsdelivr.net/npm/@bokuweb/zstd-wasm@0.0.27/+esm").then(async m=>{await m.init();return m;});
+  return zstdPromise;
+}
+function makeAlphabet(){
+  if(alphabetCache) return alphabetCache;
+  const re=/[\p{L}\p{N}\p{P}\p{S}]/u, candidates=[];
+  for(let cp=0;cp<=0x10FFFF;cp++){
+    if(cp>=0xD800&&cp<=0xDFFF) continue;
+    if((cp&0xFFFF)>=0xFFFE || (cp>=0xFDD0&&cp<=0xFDEF)) continue;
+    const ch=String.fromCodePoint(cp);
+    if(!re.test(ch)||/\s/u.test(ch)||ch.normalize("NFC")!==ch) continue;
+    candidates.push(cp);
+  }
+  const selected=[];
+  for(let i=0;i<8192;i++) selected.push(String.fromCodePoint(candidates[Math.floor(i*candidates.length/8192)]));
+  alphabetCache=selected;
+  return selected;
+}
+function pack13(bytes, alphabet){
+  const framed=new Uint8Array(8+bytes.length);
+  new DataView(framed.buffer).setBigUint64(0,BigInt(bytes.length));
+  framed.set(bytes,8);
+  let acc=0,bits=0,out="";
+  for(const byte of framed){
+    acc=(acc<<8)|byte;bits+=8;
+    while(bits>=13){bits-=13;out+=alphabet[(acc>>>bits)&8191];acc &= bits ? (1<<bits)-1 : 0;}
+  }
+  if(bits) out+=alphabet[(acc<<(13-bits))&8191];
+  return out;
+}
+function unpack13(text, alphabet){
+  const rev=new Map(alphabet.map((c,i)=>[c,i]));
+  let acc=0,bits=0;const out=[];
+  for(const ch of text){
+    const v=rev.get(ch);if(v===undefined) throw Error("Base8192文字セットにない文字があります");
+    acc=(acc<<13)|v;bits+=13;
+    while(bits>=8){bits-=8;out.push((acc>>>bits)&255);acc &= bits ? (1<<bits)-1 : 0;}
+  }
+  if(out.length<8) throw Error("データが短すぎます");
+  const len=Number(new DataView(Uint8Array.from(out.slice(0,8)).buffer).getBigUint64(0));
+  const body=out.slice(8);
+  if(!Number.isSafeInteger(len)||len>body.length) throw Error("長さヘッダーが不正です");
+  return Uint8Array.from(body.slice(0,len));
+}
+function dictEncode(input){
+  const out=[];
+  for(let i=0;i<input.length;){
+    if(input[i]==="\0"){out.push(0,0);i++;continue;}
+    let match=null;
+    for(const phrase of DICT){if(input.startsWith(phrase,i)){match=phrase;break;}}
+    if(match){out.push(0,TOKENS.get(match));i+=match.length;}
+    else{const cp=input.codePointAt(i),ch=String.fromCodePoint(cp);out.push(...encoder.encode(ch));i+=ch.length;}
+  }
+  return Uint8Array.from(out);
+}
+function dictDecode(bytes){
+  let out="",plain=[];
+  const flush=()=>{if(plain.length){out+=decoder.decode(Uint8Array.from(plain));plain=[];}};
+  for(let i=0;i<bytes.length;i++){
+    if(bytes[i]===0){
+      flush();if(i+1>=bytes.length) throw Error("辞書データが途中で終わっています");
+      const id=bytes[++i];if(id===0) out+="\0";else if(id<=DICT.length) out+=DICT[id-1];else throw Error("未知の辞書トークン");
+    }else plain.push(bytes[i]);
+  }
+  flush();return out;
+}
+function xWeight(s){
+  let n=0;
+  for(const ch of s){
+    const cp=ch.codePointAt(0);
+    n += (cp<=0x10FF && (cp<=0x024F || (cp>=0x2000&&cp<=0x200A))) ? 1 : 2;
+  }
+  return n;
+}
+function frame(bytes){const out=new Uint8Array(MAGIC.length+bytes.length);out.set(MAGIC);out.set(bytes,MAGIC.length);return out;}
+function unframe(bytes){if(MAGIC.some((b,i)=>bytes[i]!==b))throw Error("XCompactデータではありません");return bytes.slice(MAGIC.length);}
+function setStatus(msg,kind=""){ $("status").textContent=msg;$("status").className="status "+kind;}
+async function encode(){
+  $("encode").disabled=true;setStatus("Zstdを初期化中…");
+  try{
+    const text=$("source").value, raw=encoder.encode(text), replaced=dictEncode(text), z=await getZstd();
+    const compressed=z.compress(frame(replaced),19), packed=pack13(compressed,makeAlphabet());
+    $("output").textContent=packed;
+    $("original").textContent=raw.length;$("dictsize").textContent=replaced.length;$("compressed").textContent=compressed.length;$("symbols").textContent=packed.length;
+    const weight=xWeight(packed),limit=Number($("limit").value);
+    $("limitStatus").textContent=`概算ウェイト: ${weight} / ${limit} · ${weight<=limit?"目標内":"目標超過"} · Base8192の各文字がXで必ず同じウェイトになる保証はありません。`;
+    setStatus("変換完了。復号テストを実行中…");
+    const restored=dictDecode(unframe(z.decompress(unpack13(packed,makeAlphabet()))));
+    if(restored!==text) throw Error("内部往復テストに失敗しました");
+    setStatus("変換・往復テスト成功","ok");
+  }catch(e){setStatus(e.message,"err");}
+  finally{$("encode").disabled=false;}
+}
+async function decode(){
+  $("decode").disabled=true;setStatus("復号中…");
+  try{
+    const z=await getZstd(), packed=$("output").textContent.trim();
+    const bytes=unpack13(packed,makeAlphabet()), replaced=unframe(z.decompress(bytes));
+    $("source").value=dictDecode(replaced);setStatus("復号成功","ok");
+  }catch(e){setStatus(e.message,"err");}
+  finally{$("decode").disabled=false;}
+}
+$("encode").addEventListener("click",encode);
+$("decode").addEventListener("click",decode);
+$("copy").addEventListener("click",async()=>{try{await navigator.clipboard.writeText($("output").textContent);setStatus("コピーしました","ok");}catch{setStatus("クリップボードにアクセスできません","err");}});
+</script>
+</body>
+</html>
