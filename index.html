@@ -27,7 +27,7 @@ footer{margin-top:28px;color:var(--muted);font-size:12px}
 <main>
   <div class="top"><div class="brand">◈ OKIMOTI-HYOME</div><div class="pill">EXPERIMENTAL · CLIENT SIDE</div></div>
   <h1>Long text,<br><span>tiny post.</span></h1>
-  <p class="lead">文章を辞書置換 → Zstandard → Base8192 に変換。圧縮・復号はブラウザー内で行います。サーバーには文章を送信しません。</p>
+  <p class="lead">学習済みZstandard辞書 → Zstandard → Base8192 に変換。圧縮・復号はブラウザー内で行います。文章はサーバーに送信しません。</p>
 
   <section class="panel">
     <label for="source">入力テキスト</label>
@@ -53,7 +53,7 @@ footer{margin-top:28px;color:var(--muted);font-size:12px}
     <label>計測</label>
     <div class="stats">
       <div class="stat"><b id="original">—</b><small>元データ UTF-8 bytes</small></div>
-      <div class="stat"><b id="dictsize">—</b><small>辞書置換後 bytes</small></div>
+      <div class="stat"><b id="dictsize">—</b><small>Zstd入力 bytes</small></div>
       <div class="stat"><b id="compressed">—</b><small>Zstd bytes</small></div>
       <div class="stat"><b id="symbols">—</b><small>Base8192 symbols</small></div>
     </div>
@@ -62,7 +62,7 @@ footer{margin-top:28px;color:var(--muted);font-size:12px}
 
   <details class="panel">
     <summary>方式と注意点</summary>
-    <p>辞書は古典文学で頻出する語句を短いトークンに置換する固定辞書です。その後、Zstandardで圧縮します。Zstdの学習済み辞書ファイルを使う方式ではなく、辞書置換を前処理として組み合わせる実験です。</p>
+    <p>日本語の一般的な説明文・会話文を材料にZstandard CLIで学習した辞書ファイル（dict/ja-general.zdict）を使います。辞書置換ではなく、Zstandard本来の辞書圧縮です。辞書ファイルはこのリポジトリから取得します。</p>
     <p>Base8192の文字セットはUnicodeの文字カテゴリから決定的に生成します。Unicodeデータベースのバージョンが異なる環境では文字セットが一致しない可能性があります。異なる端末間での復号には、同一の文字セットを固定・配布する仕組みが必要です。</p>
     <p>Unicode文字のX上のウェイトは文字種によって異なります。ここでのカウントは目安です。140ウェイトを超えた場合は、分割投稿するか、別の共有方法を検討してください。</p>
   </details>
@@ -72,22 +72,15 @@ footer{margin-top:28px;color:var(--muted);font-size:12px}
 const $ = id => document.getElementById(id);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const MAGIC = new Uint8Array([79,75,72,89,1]); // OKHY v1
-const DICT = [
-"春はあけぼの","やうやう白くなりゆく","山ぎは","少しあかりて","紫だちたる","雲の細くたなびきたる",
-"夏は夜","月のころはさらなり","闇もなほ","蛍の多く飛びちがひたる","ほのかにうち光りて","行くもをかし",
-"秋は夕暮れ","夕日のさして","山の端","いと近うなりたる","烏の寝どころへ行く","飛び急ぐさへあはれなり",
-"冬はつとめて","雪の降りたる","言ふべきにもあらず","霜のいと白き","またさらでも","火など急ぎおこして",
-"炭持て渡る","いとつきづきし","ということ","すること","である","だった","そして","しかし","つまり","たとえば",
-"よろしくお願いします","ありがとうございます","こんにちは","おはようございます","こんばんは","わたしたち","インターネット","プログラミング","情報処理","人工知能","機械学習","データベース",
-"the ","and ","that ","with ","from ","this ","日本語","文字列","Unicode","圧縮","復号"
-].sort((a,b)=>b.length-a.length);
-const TOKENS = new Map(DICT.map((s,i)=>[s,i+1]));
-let zstdPromise;
-let alphabetCache;
-async function getZstd(){
-  if(!zstdPromise) zstdPromise = import("https://cdn.jsdelivr.net/npm/@bokuweb/zstd-wasm@0.0.27/+esm").then(async m=>{await m.init();return m;});
-  return zstdPromise;
+const MAGIC = new Uint8Array([79,75,72,89,2]); // OKHY v2: trained Zstd dictionary
+const DICT_URL = new URL("./dict/ja-general.zdict", location.href);
+let dictionaryPromise;
+async function getDictionary(){
+  if(!dictionaryPromise) dictionaryPromise = fetch(DICT_URL).then(r=>{
+    if(!r.ok) throw Error("学習済み辞書を読み込めません: HTTP "+r.status);
+    return r.arrayBuffer();
+  }).then(buf=>new Uint8Array(buf));
+  return dictionaryPromise;
 }
 function makeAlphabet(){
   if(alphabetCache) return alphabetCache;
@@ -130,28 +123,6 @@ function unpack13(text, alphabet){
   if(!Number.isSafeInteger(len)||len>body.length) throw Error("長さヘッダーが不正です");
   return Uint8Array.from(body.slice(0,len));
 }
-function dictEncode(input){
-  const out=[];
-  for(let i=0;i<input.length;){
-    if(input[i]==="\0"){out.push(0,0);i++;continue;}
-    let match=null;
-    for(const phrase of DICT){if(input.startsWith(phrase,i)){match=phrase;break;}}
-    if(match){out.push(0,TOKENS.get(match));i+=match.length;}
-    else{const cp=input.codePointAt(i),ch=String.fromCodePoint(cp);out.push(...encoder.encode(ch));i+=ch.length;}
-  }
-  return Uint8Array.from(out);
-}
-function dictDecode(bytes){
-  let out="",plain=[];
-  const flush=()=>{if(plain.length){out+=decoder.decode(Uint8Array.from(plain));plain=[];}};
-  for(let i=0;i<bytes.length;i++){
-    if(bytes[i]===0){
-      flush();if(i+1>=bytes.length) throw Error("辞書データが途中で終わっています");
-      const id=bytes[++i];if(id===0) out+="\0";else if(id<=DICT.length) out+=DICT[id-1];else throw Error("未知の辞書トークン");
-    }else plain.push(bytes[i]);
-  }
-  flush();return out;
-}
 function xWeight(s){
   let n=0;
   for(const ch of s){
@@ -166,14 +137,14 @@ function setStatus(msg,kind=""){ $("status").textContent=msg;$("status").classNa
 async function encode(){
   $("encode").disabled=true;setStatus("Zstdを初期化中…");
   try{
-    const text=$("source").value, raw=encoder.encode(text), replaced=dictEncode(text), z=await getZstd();
-    const compressed=z.compress(frame(replaced),19), packed=pack13(compressed,makeAlphabet());
+    const text=$("source").value, raw=encoder.encode(text), z=await getZstd(), dict=await getDictionary();
+    const compressed=z.compressUsingDict(z.createCCtx(),frame(raw),dict,19), packed=pack13(compressed,makeAlphabet());
     $("output").textContent=packed;
     $("original").textContent=raw.length;$("dictsize").textContent=replaced.length;$("compressed").textContent=compressed.length;$("symbols").textContent=packed.length;
     const weight=xWeight(packed),limit=Number($("limit").value);
     $("limitStatus").textContent=`概算ウェイト: ${weight} / ${limit} · ${weight<=limit?"目標内":"目標超過"} · Base8192の各文字がXで必ず同じウェイトになる保証はありません。`;
     setStatus("変換完了。復号テストを実行中…");
-    const restored=dictDecode(unframe(z.decompress(unpack13(packed,makeAlphabet()))));
+    const restored=decoder.decode(unframe(z.decompressUsingDict(z.createDCtx(),unpack13(packed,makeAlphabet()),dict)));
     if(restored!==text) throw Error("内部往復テストに失敗しました");
     setStatus("変換・往復テスト成功","ok");
   }catch(e){setStatus(e.message,"err");}
@@ -182,15 +153,7 @@ async function encode(){
 async function decode(){
   $("decode").disabled=true;setStatus("復号中…");
   try{
-    const z=await getZstd(), packed=$("output").textContent.trim();
-    const bytes=unpack13(packed,makeAlphabet()), replaced=unframe(z.decompress(bytes));
-    $("source").value=dictDecode(replaced);setStatus("復号成功","ok");
-  }catch(e){setStatus(e.message,"err");}
-  finally{$("decode").disabled=false;}
-}
-$("encode").addEventListener("click",encode);
-$("decode").addEventListener("click",decode);
-$("copy").addEventListener("click",async()=>{try{await navigator.clipboard.writeText($("output").textContent);setStatus("コピーしました","ok");}catch{setStatus("クリップボードにアクセスできません","err");}});
-</script>
-</body>
-</html>
+    const z=await getZstd(), dict=await getDictionary(), packed=$("output").textContent.trim();
+    const bytes=unpack13(packed,makeAlphabet()), raw=unframe(z.decompressUsingDict(z.createDCtx(),bytes,dict));
+    $("source").value=decoder.decode(raw);
+>
