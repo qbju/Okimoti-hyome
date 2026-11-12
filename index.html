@@ -72,88 +72,85 @@ footer{margin-top:28px;color:var(--muted);font-size:12px}
 const $ = id => document.getElementById(id);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const MAGIC = new Uint8Array([79,75,72,89,2]); // OKHY v2: trained Zstd dictionary
+const MAGIC = new Uint8Array([79,75,72,89,2]);
 const DICT_URL = new URL("./dict/ja-general.zdict", location.href);
-let dictionaryPromise;
+let zstdPromise, dictionaryPromise, alphabetCache;
+async function getZstd(){
+  if(!zstdPromise) zstdPromise=import("https://cdn.jsdelivr.net/npm/@bokuweb/zstd-wasm@0.0.27/+esm").then(async m=>{await m.init();return m;});
+  return zstdPromise;
+}
 async function getDictionary(){
-  if(!dictionaryPromise) dictionaryPromise = fetch(DICT_URL).then(r=>{
+  if(!dictionaryPromise) dictionaryPromise=fetch(DICT_URL).then(r=>{
     if(!r.ok) throw Error("学習済み辞書を読み込めません: HTTP "+r.status);
     return r.arrayBuffer();
-  }).then(buf=>new Uint8Array(buf));
+  }).then(buf=>{
+    const bytes=new Uint8Array(buf);
+    if(bytes.length<8||bytes[0]!==0x37||bytes[1]!==0xa4||bytes[2]!==0x30||bytes[3]!==0xec) throw Error("辞書ファイルの形式が不正です");
+    return bytes;
+  });
   return dictionaryPromise;
 }
 function makeAlphabet(){
-  if(alphabetCache) return alphabetCache;
-  const re=/[\p{L}\p{N}\p{P}\p{S}]/u, candidates=[];
+  if(alphabetCache)return alphabetCache;
+  const re=/[\p{L}\p{N}\p{P}\p{S}]/u,candidates=[];
   for(let cp=0;cp<=0x10FFFF;cp++){
-    if(cp>=0xD800&&cp<=0xDFFF) continue;
-    if((cp&0xFFFF)>=0xFFFE || (cp>=0xFDD0&&cp<=0xFDEF)) continue;
+    if(cp>=0xD800&&cp<=0xDFFF)continue;
+    if((cp&0xFFFF)>=0xFFFE||(cp>=0xFDD0&&cp<=0xFDEF))continue;
     const ch=String.fromCodePoint(cp);
-    if(!re.test(ch)||/\s/u.test(ch)||ch.normalize("NFC")!==ch) continue;
+    if(!re.test(ch)||/\s/u.test(ch)||ch.normalize("NFC")!==ch)continue;
     candidates.push(cp);
   }
-  const selected=[];
-  for(let i=0;i<8192;i++) selected.push(String.fromCodePoint(candidates[Math.floor(i*candidates.length/8192)]));
-  alphabetCache=selected;
-  return selected;
+  if(candidates.length<8192)throw Error("Base8192文字セットを生成できません");
+  alphabetCache=Array.from({length:8192},(_,i)=>String.fromCodePoint(candidates[Math.floor(i*candidates.length/8192)]));
+  return alphabetCache;
 }
-function pack13(bytes, alphabet){
+function pack13(bytes,alphabet){
   const framed=new Uint8Array(8+bytes.length);
-  new DataView(framed.buffer).setBigUint64(0,BigInt(bytes.length));
-  framed.set(bytes,8);
+  new DataView(framed.buffer).setBigUint64(0,BigInt(bytes.length));framed.set(bytes,8);
   let acc=0,bits=0,out="";
-  for(const byte of framed){
-    acc=(acc<<8)|byte;bits+=8;
-    while(bits>=13){bits-=13;out+=alphabet[(acc>>>bits)&8191];acc &= bits ? (1<<bits)-1 : 0;}
-  }
-  if(bits) out+=alphabet[(acc<<(13-bits))&8191];
+  for(const byte of framed){acc=(acc<<8)|byte;bits+=8;while(bits>=13){bits-=13;out+=alphabet[(acc>>>bits)&8191];acc&=bits?(1<<bits)-1:0;}}
+  if(bits)out+=alphabet[(acc<<(13-bits))&8191];
   return out;
 }
-function unpack13(text, alphabet){
-  const rev=new Map(alphabet.map((c,i)=>[c,i]));
-  let acc=0,bits=0;const out=[];
-  for(const ch of text){
-    const v=rev.get(ch);if(v===undefined) throw Error("Base8192文字セットにない文字があります");
-    acc=(acc<<13)|v;bits+=13;
-    while(bits>=8){bits-=8;out.push((acc>>>bits)&255);acc &= bits ? (1<<bits)-1 : 0;}
-  }
-  if(out.length<8) throw Error("データが短すぎます");
-  const len=Number(new DataView(Uint8Array.from(out.slice(0,8)).buffer).getBigUint64(0));
-  const body=out.slice(8);
-  if(!Number.isSafeInteger(len)||len>body.length) throw Error("長さヘッダーが不正です");
+function unpack13(text,alphabet){
+  const rev=new Map(alphabet.map((c,i)=>[c,i]));let acc=0,bits=0;const out=[];
+  for(const ch of text){const v=rev.get(ch);if(v===undefined)throw Error("Base8192文字セットにない文字があります");acc=(acc<<13)|v;bits+=13;while(bits>=8){bits-=8;out.push((acc>>>bits)&255);acc&=bits?(1<<bits)-1:0;}}
+  if(out.length<8)throw Error("データが短すぎます");
+  const header=Uint8Array.from(out.slice(0,8)),len=Number(new DataView(header.buffer).getBigUint64(0)),body=out.slice(8);
+  if(!Number.isSafeInteger(len)||len>body.length)throw Error("長さヘッダーが不正です");
   return Uint8Array.from(body.slice(0,len));
 }
-function xWeight(s){
-  let n=0;
-  for(const ch of s){
-    const cp=ch.codePointAt(0);
-    n += (cp<=0x10FF && (cp<=0x024F || (cp>=0x2000&&cp<=0x200A))) ? 1 : 2;
-  }
-  return n;
-}
 function frame(bytes){const out=new Uint8Array(MAGIC.length+bytes.length);out.set(MAGIC);out.set(bytes,MAGIC.length);return out;}
-function unframe(bytes){if(MAGIC.some((b,i)=>bytes[i]!==b))throw Error("XCompactデータではありません");return bytes.slice(MAGIC.length);}
-function setStatus(msg,kind=""){ $("status").textContent=msg;$("status").className="status "+kind;}
+function unframe(bytes){if(bytes.length<MAGIC.length||MAGIC.some((b,i)=>bytes[i]!==b))throw Error("未対応のXCompactデータです（v2形式が必要）");return bytes.slice(MAGIC.length);}
+function xWeight(s){let n=0;for(const ch of s){const cp=ch.codePointAt(0);n+=(cp<=0x10FF&&(cp<=0x024F||(cp>=0x2000&&cp<=0x200A)))?1:2;}return n;}
+function setStatus(msg,kind=""){$("status").textContent=msg;$("status").className="status "+kind;}
 async function encode(){
-  $("encode").disabled=true;setStatus("Zstdを初期化中…");
+  $("encode").disabled=true;setStatus("Zstdと学習済み辞書を読み込み中…");
   try{
-    const text=$("source").value, raw=encoder.encode(text), z=await getZstd(), dict=await getDictionary();
-    const compressed=z.compressUsingDict(z.createCCtx(),frame(raw),dict,19), packed=pack13(compressed,makeAlphabet());
-    $("output").textContent=packed;
-    $("original").textContent=raw.length;$("dictsize").textContent=replaced.length;$("compressed").textContent=compressed.length;$("symbols").textContent=packed.length;
+    const text=$("source").value,raw=encoder.encode(text),[z,dict]=await Promise.all([getZstd(),getDictionary()]);
+    const compressed=z.compressUsingDict(z.createCCtx(),frame(raw),dict,19),packed=pack13(compressed,makeAlphabet());
+    $("output").textContent=packed;$("original").textContent=raw.length;$("dictsize").textContent=raw.length;$("compressed").textContent=compressed.length;$("symbols").textContent=packed.length;
     const weight=xWeight(packed),limit=Number($("limit").value);
-    $("limitStatus").textContent=`概算ウェイト: ${weight} / ${limit} · ${weight<=limit?"目標内":"目標超過"} · Base8192の各文字がXで必ず同じウェイトになる保証はありません。`;
-    setStatus("変換完了。復号テストを実行中…");
+    $("limitStatus").textContent=`概算ウェイト: ${weight} / ${limit} · ${weight<=limit?"目標内":"目標超過"} · Xの実際の文字数計算とは異なる場合があります。`;
+    setStatus("変換完了。復号テスト中…");
     const restored=decoder.decode(unframe(z.decompressUsingDict(z.createDCtx(),unpack13(packed,makeAlphabet()),dict)));
-    if(restored!==text) throw Error("内部往復テストに失敗しました");
+    if(restored!==text)throw Error("内部往復テストに失敗しました");
     setStatus("変換・往復テスト成功","ok");
-  }catch(e){setStatus(e.message,"err");}
+  }catch(e){setStatus(e?.message||String(e),"err");}
   finally{$("encode").disabled=false;}
 }
 async function decode(){
   $("decode").disabled=true;setStatus("復号中…");
   try{
-    const z=await getZstd(), dict=await getDictionary(), packed=$("output").textContent.trim();
-    const bytes=unpack13(packed,makeAlphabet()), raw=unframe(z.decompressUsingDict(z.createDCtx(),bytes,dict));
-    $("source").value=decoder.decode(raw);
->
+    const [z,dict]=await Promise.all([getZstd(),getDictionary()]);
+    const raw=unframe(z.decompressUsingDict(z.createDCtx(),unpack13($("output").textContent.trim(),makeAlphabet()),dict));
+    $("source").value=decoder.decode(raw);setStatus("復号成功","ok");
+  }catch(e){setStatus(e?.message||String(e),"err");}
+  finally{$("decode").disabled=false;}
+}
+$("encode").addEventListener("click",encode);
+$("decode").addEventListener("click",decode);
+$("copy").addEventListener("click",async()=>{try{await navigator.clipboard.writeText($("output").textContent);setStatus("コピーしました","ok");}catch{setStatus("クリップボードにアクセスできません","err");}});
+</script>
+</body>
+</html>
